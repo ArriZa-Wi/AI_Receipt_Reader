@@ -5,7 +5,9 @@ from django.urls import reverse_lazy
 from django.views.generic import TemplateView, FormView, ListView, DetailView
 
 from django.core.files.base import ContentFile
-
+import csv
+from io import StringIO
+from django.core.files.base import ContentFile
 from .forms import SignUpForm, CaseUploadForm
 from .models import Case
 import csv
@@ -21,92 +23,32 @@ import json
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.views import View
-
-# Landing / Home page
-class LandingPageView(TemplateView):
-    template_name = "landing/index.html"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        # Provide the login form to the template
-        context['login_form'] = AuthenticationForm()
-        return context
-
-
-# Signup page
-class SignUpView(FormView):
-    template_name = "receipts/signup.html"
-    form_class = SignUpForm
-    success_url = reverse_lazy("home")  # redirect to landing page after signup
-
-    def form_valid(self, form):
-        form.save()  # Do NOT log in automatically
-        return super().form_valid(form)
-
-class HomePageView(LoginRequiredMixin, FormView):
-    template_name = "home/home.html"
-    form_class = CaseUploadForm
-    success_url = reverse_lazy('home_signedin')  # reload page after upload
-
-    def form_valid(self, form):
-        # Assign the user
-        case = form.save(commit=False)
-        case.user = self.request.user
-        case.save()
-        # Send the saved receipt image to n8n for processing (binary upload)
-        try:
-            resp = send_file_to_n8n(case.receipt_image)
-        except Exception as exc:
-            messages.error(self.request, f"Failed to send to n8n: {exc}")
-            return super().form_valid(form)
-
-        if resp.status_code == 200 and resp.text:
-            # assume the webhook returns CSV text in body
-            csv_text = resp.text
-            case.csv_file.save(f"case_{case.id}.csv", ContentFile(csv_text))
-            case.processed = True
-            case.save()
-            messages.success(self.request, "Receipt uploaded and processed successfully!")
-        else:
-            messages.warning(self.request, f"Uploaded but n8n returned {resp.status_code}")
-
-        return super().form_valid(form)
+import re
 
 
 def send_file_to_n8n(file_field, webhook_path=None):
-    """
-    Send a Django FileField (or path) to n8n webhook in binary as multipart/form-data.
+    """Send a Django FileField (or path) to the configured n8n webhook as multipart/form-data.
 
-    - file_field: an instance of FileField (e.g. case.receipt_image) or a filesystem path string
-    - webhook_path: optional path override; if not provided uses settings.N8N_WEBHOOK_URL
-
-    Returns requests.Response
+    Returns a requests.Response-like object. Raises RuntimeError if `requests` isn't available.
     """
     if requests is None:
         raise RuntimeError('The "requests" library is required to send files to n8n. Install it with "pip install requests"')
 
-    if webhook_path:
-        url = webhook_path
-    else:
-        url = getattr(settings, 'N8N_WEBHOOK_URL', None)
+    url = webhook_path or getattr(settings, 'N8N_WEBHOOK_URL', None)
     if not url:
         raise ValueError('N8N_WEBHOOK_URL not configured in settings')
 
-    # Accept either a FileField-like object or a path
+    # Accept either a FileField-like object or a filesystem path
     if hasattr(file_field, 'open'):
-        # Ensure the field's file is open and use the underlying file object
         file_field.open('rb')
-        # FieldFile exposes .file which is a file-like object
         fileobj = getattr(file_field, 'file', file_field)
         filename = getattr(file_field, 'name', 'upload')
     else:
         fileobj = open(file_field, 'rb')
         filename = file_field
 
-    # Guess a content type if possible
     import mimetypes
     content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
-
     files = {'file': (filename, fileobj, content_type)}
     try:
         try:
@@ -122,12 +64,54 @@ def send_file_to_n8n(file_field, webhook_path=None):
 
     return resp
 
+# Landing / Home page
+class LandingPageView(TemplateView):
+    template_name = "landing/index.html"
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Provide the login form to the template
+        context['login_form'] = AuthenticationForm()
+        return context
+
+
+class SignUpView(FormView):
+    template_name = "receipts/signup.html"
+    form_class = SignUpForm
+    success_url = reverse_lazy("home")
+
+    def form_valid(self, form):
+        form.save()
+        return super().form_valid(form)
+
+
+class HomePageView(LoginRequiredMixin, FormView):
+    template_name = "home/home.html"
+    form_class = CaseUploadForm
+    success_url = reverse_lazy('home_signedin')
+
+    def form_valid(self, form):
+        case = form.save(commit=False)
+        case.user = self.request.user
+        case.save()
+        try:
+            resp = send_file_to_n8n(case.receipt_image)
+        except Exception as exc:
+            messages.error(self.request, f"Failed to send to n8n: {exc}")
+            return super().form_valid(form)
+
+        if getattr(resp, 'status_code', None) == 200 and getattr(resp, 'text', None):
+            csv_text = resp.text
+            case.csv_file.save(f"case_{case.id}.csv", ContentFile(csv_text))
+            case.processed = True
+            case.save()
+            messages.success(self.request, "Receipt uploaded and processed successfully!")
+        else:
+            messages.warning(self.request, f"Uploaded but n8n returned {getattr(resp, 'status_code', 'unknown')}")
+
+        return super().form_valid(form)
+
 
 class SendReceiptToN8nView(LoginRequiredMixin, View):
-    """POST to this view with a `case_id` to send that case's receipt image to n8n.
-
-    Example: POST /cases/1/send-to-n8n/
-    """
     def post(self, request, pk):
         case = Case.objects.filter(pk=pk, user=request.user).first()
         if not case:
@@ -196,18 +180,123 @@ class N8nCallbackView(View):
             if header != secret:
                 return JsonResponse({'error': 'invalid secret'}, status=403)
 
-        # Try JSON first
+        # Try JSON first. New n8n format is expected to be a list of objects like:
+        # [ { "success": true, "data": { "merchant": "...", "date": "...", "total": "..." } } ]
         case_id = None
         csv_text = None
+
         if request.content_type == 'application/json':
             try:
-                data = json.loads(request.body.decode('utf-8'))
-                case_id = data.get('case_id')
-                csv_text = data.get('csv')
+                payload = json.loads(request.body.decode('utf-8'))
             except Exception:
-                pass
+                payload = None
 
-        # If not JSON, check form or files
+            # payload might be a dict (legacy) or a list (new format)
+            if isinstance(payload, dict):
+                # legacy single-object JSON
+                case_id = payload.get('case_id')
+                csv_text = payload.get('csv')
+            elif isinstance(payload, list) and len(payload) > 0:
+                def _sanitize_key(k: str) -> str:
+                    # remove surrounding quotes, braces, colons, and whitespace
+                    if not isinstance(k, str):
+                        k = str(k)
+                    k = k.strip()
+                    # remove leading/trailing braces or quotes
+                    k = re.sub(r'^[\{\}\s\'"]+|[\{\}\s\'"]+$', '', k)
+                    # replace inner spaces with underscore
+                    k = k.replace(' ', '_')
+                    return k
+
+                def _sanitize_value(v: object) -> str:
+                    if v is None:
+                        return ''
+                    s = str(v).strip()
+                    # strip wrapping braces/quotes/colons if present
+                    s = re.sub(r'^[:\{\}\s\'"]+|[:\{\}\s\'"]+$', '', s)
+                    return s
+
+                # # Helper to detect and parse stringified data like: data:{"merchant":"Walmart"}
+                # def _maybe_parse_stringified_data(s: str):
+                #     if not isinstance(s, str):
+                #         return None
+                #     s_strip = s.strip()
+                #     # if it looks like a JSON object, attempt to parse
+                #     if (s_strip.startswith('{') and s_strip.endswith('}')) or ('"' in s_strip and ':' in s_strip):
+                #         try:
+                #             return json.loads(s_strip)
+                #         except Exception:
+                #             # try to recover simple key:value string pairs like data: {merchant: Walmart}
+                #             try:
+                #                 # remove leading 'data:' if present
+                #                 s2 = re.sub(r'^\s*data\s*:\s*', '', s_strip, flags=re.IGNORECASE)
+                #                 # convert key: value; pairs separated by commas
+                #                 parts = [p.strip() for p in re.split(r',(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)', s2) if p.strip()]
+                #                 out = {}
+                #                 for p in parts:
+                #                     if ':' in p:
+                #                         k, v = p.split(':', 1)
+                #                         out[_sanitize_key(k)] = _sanitize_value(v)
+                #                 return out
+                #             except Exception:
+                #                 return None
+                    # return None
+                # new n8n structure: list of { success: bool, data: {...}, case_id?: id }
+
+
+                rows = []
+                headers = set()
+                found_case_id = None
+
+
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    # validate success key
+                    if 'success' in item and item.get('success') is not True:
+                        return JsonResponse({'error': 'n8n reported failure', 'item': item}, status=400)
+
+                    data_obj = item.get('data')
+                    if not isinstance(data_obj, dict):
+                        continue
+
+                    rows.append(data_obj)
+                    headers.update(data_obj.keys())
+
+                    if not found_case_id and 'case_id' in item:
+                        found_case_id = item.get('case_id')
+
+                # Build CSV text cleanly with DictWriter
+                # if rows and headers:
+                #     output = StringIO()
+                #     writer = csv.DictWriter(output, fieldnames=list(headers))
+                #     writer.writeheader()
+                #     for r in rows:
+                #         writer.writerow(r)
+                #     csv_text = output.getvalue()
+
+                if rows:
+                    # 1) stable header order: use the first row's keys, then add any extras (sorted)
+                    first = list(rows[0].keys())
+                    extras = sorted({k for r in rows for k in r.keys()} - set(first))
+                    ordered_headers = first + extras
+                
+                    buf = io.StringIO()
+                    writer = csv.DictWriter(
+                        buf,
+                        fieldnames=ordered_headers,
+                        extrasaction="ignore",   # ignore unexpected keys safely
+                        lineterminator="\n"      # avoid blank lines on Windows
+                    )
+                    writer.writeheader()
+                    for r in rows:
+                        writer.writerow({k: (r.get(k, "") if r.get(k, "") is not None else "") for k in ordered_headers})
+                    csv_text = buf.getvalue()
+
+                if not case_id and found_case_id:
+                    case_id = found_case_id
+
+        # If not JSON or CSV not set, check form or files (backwards compatibility)
         if not case_id:
             case_id = request.POST.get('case_id')
         if not csv_text and 'csv' in request.POST:

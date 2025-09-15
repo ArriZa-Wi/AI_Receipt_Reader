@@ -139,3 +139,6 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 LOGIN_REDIRECT_URL = 'home_signedin'
 # Redirect to the public landing page after logout
 LOGOUT_REDIRECT_URL = 'home'
+
+# n8n webhook configuration (set this in local settings or env in production)
+N8N_WEBHOOK_URL = 'https://jjohnson183.app.n8n.cloud/webhook/upload-image'
