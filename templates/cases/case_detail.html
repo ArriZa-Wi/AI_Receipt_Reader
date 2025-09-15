@@ -15,13 +15,5 @@
     {% endif %}
 
     <h4>CSV File</h4>
-    {% if case.csv_file %}
-        <a href="{{ case.csv_file.url }}" class="btn btn-success">Download CSV</a>
-    {% else %}
-        {% if case.processed %}
-            <span class="badge bg-warning text-dark">Processing...</span>
-        {% else %}
-            <p class="text-muted">No CSV available yet.</p>
-        {% endif %}
-    {% endif %}
+    <a href="{% url 'case_download_csv' case.id %}" class="btn btn-success">Download CSV</a>
 {% endblock %}
