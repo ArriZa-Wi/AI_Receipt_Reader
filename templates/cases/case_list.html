@@ -1,0 +1,18 @@
+<!-- templates/cases/case_list.html -->
+{% extends 'base.html' %}
+
+{% block title %}Your Cases - AI Receipt Reader{% endblock %}
+
+{% block content %}
+    <h2>Your Cases</h2>
+    <ul class="list-group mt-3">
+        {% for case in cases %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                Case {{ case.id }} - {{ case.created_at|date:"M d, Y H:i" }}
+                <a href="{% url 'case_detail' case.id %}" class="btn btn-sm btn-primary">View</a>
+            </li>
+        {% empty %}
+            <li class="list-group-item">No cases uploaded yet.</li>
+        {% endfor %}
+    </ul>
+{% endblock %}

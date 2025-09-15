@@ -1,0 +1,27 @@
+<!-- templates/cases/case_detail.html -->
+{% extends 'base.html' %}
+
+{% block title %}Case {{ case.id }} - AI Receipt Reader{% endblock %}
+
+{% block content %}
+    <h2>Case {{ case.id }}</h2>
+    <p>Uploaded at: {{ case.created_at|date:"M d, Y H:i" }}</p>
+
+    <h4>Receipt Image</h4>
+    {% if case.receipt_image %}
+        <img src="{{ case.receipt_image.url }}" class="img-fluid mb-3" alt="Receipt Image">
+    {% else %}
+        <p class="text-muted">No receipt image uploaded for this case.</p>
+    {% endif %}
+
+    <h4>CSV File</h4>
+    {% if case.csv_file %}
+        <a href="{{ case.csv_file.url }}" class="btn btn-success">Download CSV</a>
+    {% else %}
+        {% if case.processed %}
+            <span class="badge bg-warning text-dark">Processing...</span>
+        {% else %}
+            <p class="text-muted">No CSV available yet.</p>
+        {% endif %}
+    {% endif %}
+{% endblock %}
