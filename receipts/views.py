@@ -17,6 +17,9 @@ from django.conf import settings
 from django.http import JsonResponse
 from django.http import HttpResponse, FileResponse
 import os
+import json
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from django.views import View
 
 # Landing / Home page
@@ -161,38 +164,78 @@ class DownloadCSVView(LoginRequiredMixin, View):
                 except Exception:
                     pass
 
-        # Otherwise, send file to n8n to request processing
+        # Otherwise, trigger async processing in n8n and instruct user to check back
         try:
             resp = send_file_to_n8n(case.receipt_image)
         except Exception as exc:
+            messages.error(request, f"Failed to send to n8n: {exc}")
             return JsonResponse({'error': str(exc)}, status=500)
 
-        if resp.status_code != 200:
-            return JsonResponse({'error': f'n8n returned {resp.status_code}', 'body': resp.text}, status=502)
+        # We expect n8n to start a workflow and callback when done. Inform the user.
+        messages.info(request, "Processing started — the CSV will be available when n8n finishes.")
+        # Redirect back to case detail where the CSV button will serve the file when ready
+        from django.shortcuts import redirect
+        return redirect('case_detail', pk=case.id)
 
-        # Try to parse JSON response that contains 'csv' field; otherwise use raw text
+
+@method_decorator(csrf_exempt, name='dispatch')
+class N8nCallbackView(View):
+    """Endpoint for n8n to POST processing results.
+
+    Expected JSON body: { "case_id": <id>, "csv": "...csv text..." }
+    Or multipart with a file field named 'file' (CSV file) and form field 'case_id'.
+
+    If `N8N_CALLBACK_SECRET` is set in settings, the request must include header
+    `X-N8N-SECRET` with that secret value.
+    """
+    def post(self, request):
+        # Optional secret check
+        secret = getattr(settings, 'N8N_CALLBACK_SECRET', None)
+        if secret:
+            header = request.META.get('HTTP_X_N8N_SECRET')
+            if header != secret:
+                return JsonResponse({'error': 'invalid secret'}, status=403)
+
+        # Try JSON first
+        case_id = None
         csv_text = None
+        if request.content_type == 'application/json':
+            try:
+                data = json.loads(request.body.decode('utf-8'))
+                case_id = data.get('case_id')
+                csv_text = data.get('csv')
+            except Exception:
+                pass
+
+        # If not JSON, check form or files
+        if not case_id:
+            case_id = request.POST.get('case_id')
+        if not csv_text and 'csv' in request.POST:
+            csv_text = request.POST.get('csv')
+        if not csv_text and 'file' in request.FILES:
+            uploaded = request.FILES['file']
+            try:
+                csv_text = uploaded.read().decode('utf-8')
+            except Exception:
+                csv_text = None
+
+        if not case_id:
+            return JsonResponse({'error': 'case_id missing'}, status=400)
+
         try:
-            data = resp.json()
-            if isinstance(data, dict) and 'csv' in data:
-                csv_text = data['csv']
-            else:
-                # if JSON but no csv field, fall back to text
-                csv_text = resp.text
-        except ValueError:
-            csv_text = resp.text
+            case = Case.objects.get(pk=int(case_id))
+        except Case.DoesNotExist:
+            return JsonResponse({'error': 'case not found'}, status=404)
 
         if not csv_text:
-            return JsonResponse({'error': 'No CSV returned by n8n'}, status=502)
+            return JsonResponse({'error': 'no csv found in payload'}, status=400)
 
-        # Save CSV to Case and serve
+        # Save CSV to case
         case.csv_file.save(f"case_{case.id}.csv", ContentFile(csv_text))
         case.processed = True
         case.save()
 
-        response = HttpResponse(csv_text, content_type='text/csv')
-        response['Content-Disposition'] = f'attachment; filename="case_{case.id}.csv"'
-        return response
+        return JsonResponse({'status': 'ok'})
 
 class CaseListView(LoginRequiredMixin, ListView):
     model = Case

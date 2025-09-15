@@ -8,6 +8,7 @@ from .views import (
     CaseDetailView,
     SendReceiptToN8nView,
     DownloadCSVView,
+    N8nCallbackView,
 )
 
 urlpatterns = [
@@ -18,4 +19,5 @@ urlpatterns = [
     path('cases/<int:pk>/', CaseDetailView.as_view(), name='case_detail'),
     path('cases/<int:pk>/send-to-n8n/', SendReceiptToN8nView.as_view(), name='case_send_to_n8n'),
     path('cases/<int:pk>/download-csv/', DownloadCSVView.as_view(), name='case_download_csv'),
+    path('webhook/n8n/callback/', N8nCallbackView.as_view(), name='n8n_callback'),
 ]
