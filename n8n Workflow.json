@@ -1,0 +1,507 @@
+{
+  "name": "Receipt Documentor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "/upload-image",
+        "responseMode": "responseNode",
+        "options": {
+          "binaryPropertyName": "file"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -112,
+        16
+      ],
+      "id": "210af5dc-7f3a-43d4-800a-ee39dd42a6af",
+      "name": "Webhook",
+      "webhookId": "a433b838-c587-44fb-b746-97ec8c4979fe"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ocr.space/parse/image",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "test",
+              "inputDataFieldName": "file0"
+            },
+            {
+              "name": "scale",
+              "value": "true"
+            },
+            {
+              "name": "OCREngine",
+              "value": "2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "c6ad4f4a-9363-47b1-b272-22904239ffbd",
+      "name": "Extract Text",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "7biPd1bKXHufRvEu",
+          "name": "OCRspace Credentials"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1bedbfaa-ff97-461d-a59c-ec8b3e24e2f9",
+              "leftValue": "={{ $json.IsErroredOnProcessing }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        -16
+      ],
+      "id": "3341fa3f-1fde-42e8-814b-73b266e7d4ab",
+      "name": "Successful Extraction"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "99c83b45-0ac2-4227-9bce-c01a6bf36de6",
+              "name": "Extracted Text",
+              "value": "={{ $json.ParsedResults[0].ParsedText }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        -32
+      ],
+      "id": "9e532557-168c-4804-bdb8-321be9a0b982",
+      "name": "Isolate Text"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=## Role:\nYou are an accountant at a company who takes in raw text from analyzed receipts and extracts only certain information that the company needs. \n\n\n## Job:\nYour job is to review the given text from a receipt and extract the who the merchant is, the date of the transaction, and an total cost of the transaction.\n\n\n## Output:\nYour output must be a JSON object in the following format:\n{\n  \"merchant\" : String (Who the merchant of the exchange is),\n  \"date\": String (The date of the purchase or exchange),\n  \"total\": String (The total cost of the transaction),\n  \"reasoning\": String (An explanation on why the merchant, date, and total were selected based on the data)\n}",
+              "role": "system"
+            },
+            {
+              "content": "={{ $json['Extracted Text'] }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1136,
+        -32
+      ],
+      "id": "ec723734-62c6-4701-b341-b7a6d027a59c",
+      "name": "Extract Specific Information",
+      "credentials": {
+        "openAiApi": {
+          "id": "EQ3zYlYpWuZpFPKo",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"success\": false,\n  \"error\": \"The text extraction failed\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        800,
+        192
+      ],
+      "id": "f1c75b38-e7af-4be3-b5be-fa3971dd88d0",
+      "name": "Failed Extraction"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"success\": false,\n  \"error\": \"Invalid image input\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        240,
+        192
+      ],
+      "id": "78fe2a80-968a-461b-b2e8-8d17642ed17e",
+      "name": "Invalid Input"
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1808,
+        -48
+      ],
+      "id": "b2f5bc87-8690-438f-95f5-fc8c3089f0f3",
+      "name": "Successful"
+    },
+    {
+      "parameters": {
+        "content": "## Extract Text",
+        "height": 400,
+        "width": 640
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        416,
+        -64
+      ],
+      "id": "eae07450-3efb-41ea-98ae-8c38cdfee1be",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Format and Verify Input",
+        "height": 400,
+        "width": 544,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -160,
+        -64
+      ],
+      "id": "7047f4c9-76d4-4273-b855-cd742c7e5ae6",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d3377f2b-74d3-4f57-9c21-0c0631e792fe",
+              "name": "success",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "f33988b9-bc3e-4f2e-b027-fe736b27ba21",
+              "name": "data.merchant",
+              "value": "={{ $json.message.content.merchant ? $json.message.content.merchant : \"Unknown\"}}",
+              "type": "string"
+            },
+            {
+              "id": "94672d55-b8d0-4066-bae6-2613f10f47ad",
+              "name": "data.date",
+              "value": "={{ $json.message.content.date ? $json.message.content.date : \"Unknown\"}}",
+              "type": "string"
+            },
+            {
+              "id": "61ba5ca4-e585-4df9-913b-af116f26fc80",
+              "name": "data.total",
+              "value": "={{ $json.message.content.total ? $json.message.content.total : \"Unknown\"}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1632,
+        -48
+      ],
+      "id": "3358270c-d764-44be-b488-17a96b853d0c",
+      "name": "Format Final Output"
+    },
+    {
+      "parameters": {
+        "operation": "information",
+        "dataPropertyName": "file0"
+      },
+      "type": "n8n-nodes-base.editImage",
+      "typeVersion": 1,
+      "position": [
+        96,
+        16
+      ],
+      "id": "6a8c5c76-b600-460f-9c3c-6cf6323c8164",
+      "name": "File Information and Compression",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1bedbfaa-ff97-461d-a59c-ec8b3e24e2f9",
+              "leftValue": "={{ $json.message.content.merchant }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "f40058b6-b01d-46c9-925c-6e9af41edd0d",
+              "leftValue": "={{ $json.message.content.date }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "dfe4d505-9ecd-4998-8097-7ea32688f2bb",
+              "leftValue": "={{ $json.message.content.total }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1424,
+        -32
+      ],
+      "id": "d0ac3d99-f992-40d0-93d3-c8d1f5f81974",
+      "name": "Successful Isolation"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"success\": false,\n  \"error\": \"The data isolation failed\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1552,
+        160
+      ],
+      "id": "a4f38f1c-6db2-4afa-86f9-29d36159a620",
+      "name": "Failed Isolation"
+    },
+    {
+      "parameters": {
+        "content": "## Extract Needed Data and Return Result",
+        "height": 400,
+        "width": 928,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1088,
+        -96
+      ],
+      "id": "0d23f91f-1269-4294-b594-1a14a8108bb4",
+      "name": "Sticky Note2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "File Information and Compression",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text": {
+      "main": [
+        [
+          {
+            "node": "Successful Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failed Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Successful Extraction": {
+      "main": [
+        [
+          {
+            "node": "Isolate Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failed Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Isolate Text": {
+      "main": [
+        [
+          {
+            "node": "Extract Specific Information",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Specific Information": {
+      "main": [
+        [
+          {
+            "node": "Successful Isolation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Final Output": {
+      "main": [
+        [
+          {
+            "node": "Successful",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File Information and Compression": {
+      "main": [
+        [
+          {
+            "node": "Extract Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Invalid Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Successful Isolation": {
+      "main": [
+        [
+          {
+            "node": "Format Final Output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failed Isolation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "a48827b0-5743-4be4-baab-d8d02742c2b5",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "69cfb4c99bed2db8cc761f48a53c2e59e98465edbedd693a272dd378f031fa3a"
+  },
+  "id": "5RkkkCkEnZr846Id",
+  "tags": []
+}
